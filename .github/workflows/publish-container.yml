@@ -23,7 +23,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/anhao-werewolf-ai-dm:latest
+          tags: ghcr.io/lxttt0323/anhao-werewolf-ai-dm:latest
       - name: Make image public
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

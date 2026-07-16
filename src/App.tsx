@@ -29,10 +29,12 @@ const phases = {
 }
 
 const clientId = (() => {
-  const current = localStorage.getItem('anHaoClientId')
+  const device = new URLSearchParams(location.search).get('device')
+  const storageKey = device ? `anHaoClientId:${device}` : 'anHaoClientId'
+  const current = localStorage.getItem(storageKey)
   if (current) return current
   const next = crypto.randomUUID()
-  localStorage.setItem('anHaoClientId', next)
+  localStorage.setItem(storageKey, next)
   return next
 })()
 
@@ -49,7 +51,6 @@ function App() {
   const [me, setMe] = useState<Me | null>(null)
   const [mode, setMode] = useState<'control' | 'play'>('control')
   const [name, setName] = useState(() => localStorage.getItem('anHaoName') ?? '')
-  const [seat, setSeat] = useState('1')
   const [roomInput, setRoomInput] = useState(() => new URLSearchParams(location.search).get('room') ?? '')
   const [qrUrl, setQrUrl] = useState('')
   const [error, setError] = useState('')
@@ -86,13 +87,13 @@ function App() {
   const createRoom = async () => {
     if (!name.trim()) return setError('先填一个昵称')
     rememberName()
-    const result = await emit('create-room', { clientId, name: name.trim(), seat: Number(seat) })
+    const result = await emit('create-room', { clientId, name: name.trim() })
     if (!result.ok) setError(result.error ?? '创建失败，请稍后再试')
   }
   const joinRoom = async () => {
     if (!name.trim() || !roomInput.trim()) return setError('请填写昵称和房间号')
     rememberName()
-    const result = await emit('join-room', { clientId, name: name.trim(), seat: Number(seat), code: roomInput.trim().toUpperCase() })
+    const result = await emit('join-room', { clientId, name: name.trim(), code: roomInput.trim().toUpperCase() })
     if (!result.ok) setError(result.error ?? '加入失败，请检查房间号或座位')
   }
   const startGame = async () => {
@@ -155,7 +156,7 @@ function App() {
     } catch { setError('请允许浏览器使用麦克风') }
   }
 
-  if (!room || !me) return <EntryScreen name={name} seat={seat} roomInput={roomInput} error={error} setName={setName} setSeat={setSeat} setRoomInput={setRoomInput} createRoom={createRoom} joinRoom={joinRoom} />
+  if (!room || !me) return <EntryScreen name={name} roomInput={roomInput} error={error} setName={setName} setRoomInput={setRoomInput} createRoom={createRoom} joinRoom={joinRoom} />
 
   const isControl = me.isHost && mode === 'control'
   return <main className="app-shell">
@@ -166,9 +167,9 @@ function App() {
   </main>
 }
 
-function EntryScreen({ name, seat, roomInput, error, setName, setSeat, setRoomInput, createRoom, joinRoom }: {
-  name: string; seat: string; roomInput: string; error: string
-  setName: (value: string) => void; setSeat: (value: string) => void; setRoomInput: (value: string) => void
+function EntryScreen({ name, roomInput, error, setName, setRoomInput, createRoom, joinRoom }: {
+  name: string; roomInput: string; error: string
+  setName: (value: string) => void; setRoomInput: (value: string) => void
   createRoom: () => void; joinRoom: () => void
 }) {
   return <main className="entry-page">
@@ -188,13 +189,14 @@ function EntryScreen({ name, seat, roomInput, error, setName, setSeat, setRoomIn
         </div>
       </div>
       <section className="entry-card" aria-label="进入狼人杀房间">
-        <div className="card-heading"><span>开始一局</span><p>创建房间，或输入朋友分享的房间号</p></div>
+        <div className="card-heading"><span>开始一局</span><p>扫码会自动带入房间号，确认昵称后系统自动分配空位</p></div>
         <label>你的昵称<input value={name} maxLength={12} onChange={(event) => setName(event.target.value)} placeholder="例如：小北" /></label>
-        <label>选择座位<select value={seat} onChange={(event) => setSeat(event.target.value)}>{Array.from({ length: 9 }, (_, index) => <option key={index} value={index + 1}>{index + 1} 号座位</option>)}</select></label>
-        <button className="button primary" onClick={createRoom}><Crown size={18} />创建并主持</button>
+        <div className="auto-seat-note"><UsersRound size={16} /><span>创建或加入后，自动分配当前最小空位</span></div>
+        <button className="button primary" onClick={createRoom}><Crown size={18} />创建房间并自动入座</button>
         <div className="divider"><span>或加入已有房间</span></div>
         <label>房间号<input value={roomInput} onChange={(event) => setRoomInput(event.target.value.toUpperCase())} placeholder="例如：8F7K6" /></label>
-        <button className="button secondary" onClick={joinRoom}><UsersRound size={18} />加入房间</button>
+        <div className={`scan-note ${roomInput ? 'ready' : ''}`}><QrCode size={16} /><span>{roomInput ? `已识别房间 ${roomInput}，加入后自动安排座位` : '扫主持人的二维码后，房间号会自动填入这里'}</span></div>
+        <button className="button secondary" onClick={joinRoom}><UsersRound size={18} />自动分配座位并加入</button>
         {error && <p className="error-message">{error}</p>}
       </section>
     </section>
@@ -215,6 +217,7 @@ function RoomHeader({ room, me, name, mode, setMode }: { room: Room; me: Me; nam
 function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance }: { room: Room; alivePlayers: Player[]; qrUrl: string; error: string; startGame: () => void; advance: () => void }) {
   const phase = phases[room.phase]
   const PhaseIcon = phase.icon
+  const latestJoin = room.events.find((item) => item.text.includes('加入了房间'))
   const command = room.phase === 'lobby' ? '发放身份，开始第 1 天' : room.phase === 'night' ? '天亮，结算夜晚' : room.phase === 'day' ? '结束讨论，开始投票' : room.phase === 'vote' ? '结算票型，进入下一天' : ''
   const copyJoinUrl = () => navigator.clipboard.writeText(room.joinUrl)
   return <div className="workspace">
@@ -236,7 +239,7 @@ function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance }: {
       {error && <p className="error-message workspace-error">{error}</p>}
       <div className="control-grid">
         <section className="activity-panel"><div className="panel-header"><span>公开记录</span><ClipboardList size={17} /></div>{room.events.length ? room.events.slice(0, 5).map((event) => <p className="event-row" key={`${event.time}-${event.text}`}><time>{event.time}</time><span>{event.text}</span></p>) : <p className="empty-copy">游戏开始后，公开事件会出现在这里。</p>}</section>
-        <section className="share-panel"><div><span>邀请玩家进入</span><b>{room.code}</b><p>扫码或输入房间号加入</p><button className="text-button" onClick={copyJoinUrl}><Copy size={14} />复制邀请链接</button></div>{qrUrl ? <img src={qrUrl} alt="加入房间二维码" /> : <QrCode size={68} />}</section>
+        <section className="share-panel"><div><span>扫码自动入房</span><b>{room.code}</b><p>扫码后自动带入房间号，并分配空位</p><div className="join-live"><strong>{room.players.length} / 9 已入房</strong><small>{latestJoin ? latestJoin.text : '等待下一位玩家加入'}</small></div><button className="text-button" onClick={copyJoinUrl}><Copy size={14} />复制邀请链接</button></div>{qrUrl ? <img src={qrUrl} alt="加入房间二维码" /> : <QrCode size={68} />}</section>
       </div>
     </section>
     <aside className="info-rail">
@@ -258,6 +261,7 @@ function PlayerDesk({ room, me, alivePlayers, error, witchMode, setWitchMode, su
     <section className="player-main">
       <div className="player-intro"><p className="eyebrow"><LockKeyhole size={14} />仅你可见</p><h1>{room.phase === 'lobby' ? '等大家入座' : me.role}</h1><p>{room.phase === 'lobby' ? '开始游戏后，你会在这里收到专属身份与私密行动。' : me.role === '狼人' ? `狼队成员：${me.wolfTeam.map((player) => `${player.seat}号 ${player.name}`).join('、')}` : me.role === '预言家' ? '每晚可以查验一名存活玩家。' : me.role === '女巫' ? '每晚可以选择救人或使用毒药。' : '白天发言、观察，并为自己的判断投票。'}</p></div>
       {room.phase !== 'lobby' && <span className="role-badge">{roleType}</span>}
+      {room.phase === 'lobby' && <LobbyStatus room={room} me={me} />}
       {!me.alive && <div className="notice dead"><Eye size={17} />你已出局，本局仍可查看公开记录。</div>}
       {room.phase === 'lobby' && <button className={`button ready ${me.ready ? 'ready-done' : ''}`} onClick={toggleReady}>{me.ready ? <Check size={18} /> : <ShieldCheck size={18} />}{me.ready ? '已准备，等待主持开始' : '我已入座，点击准备'}</button>}
       {room.phase === 'night' && me.alive && <NightAction me={me} candidates={candidates} witchMode={witchMode} setWitchMode={setWitchMode} submit={submitRoleAction} />}
@@ -271,6 +275,17 @@ function PlayerDesk({ room, me, alivePlayers, error, witchMode, setWitchMode, su
       <section className="recap-card"><div><Sparkles size={18} /><span>被打断了？</span><p>AI 根据公开记录整理你错过的内容。</p></div><button className="button secondary small" onClick={generateRecap} disabled={recapLoading}>{recapLoading ? '整理中...' : '我刚回来，补一下'}</button>{recap && <div className="recap-result">{recap.map((event) => <p key={`${event.time}-${event.text}`}><time>{event.time}</time>{event.text}</p>)}</div>}</section>
     </aside>
   </div>
+}
+
+function LobbyStatus({ room, me }: { room: Room; me: Me }) {
+  const occupiedSeats = new Set(room.players.map((player) => player.seat))
+  return <section className="lobby-status">
+    <div><span>已自动入座</span><strong>{me.seat} 号座位</strong><small>当前 {room.players.length} / 9 位玩家已进入房间</small></div>
+    <div className="lobby-seat-grid" aria-label="房间座位状态">{Array.from({ length: 9 }, (_, index) => {
+      const seat = index + 1
+      return <span className={occupiedSeats.has(seat) ? 'occupied' : ''} key={seat}>{seat}</span>
+    })}</div>
+  </section>
 }
 
 function NightAction({ me, candidates, witchMode, setWitchMode, submit }: { me: Me; candidates: Player[]; witchMode: 'save' | 'poison'; setWitchMode: (mode: 'save' | 'poison') => void; submit: (target?: number) => void }) {

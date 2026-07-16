@@ -258,7 +258,7 @@ function guardHost(room, clientId) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('create-room', ({ clientId, name, seat }, reply) => {
+  socket.on('create-room', ({ clientId, name }, reply) => {
     const code = roomCode()
     const room = {
       code,
@@ -273,21 +273,21 @@ io.on('connection', (socket) => {
       night: { wolfTarget: null, witchSave: false, witchPoison: null },
     }
     rooms.set(code, room)
-    joinRoom(socket, room, { clientId, name, seat })
-    event(room, `${seat} 号 ${name} 创建了房间。`)
+    const player = joinRoom(socket, room, { clientId, name })
+    event(room, `${player.seat} 号 ${player.name} 创建了房间。`)
     broadcast(room)
-    reply({ ok: true, code })
+    reply({ ok: true, code, seat: player.seat })
   })
 
-  socket.on('join-room', ({ code, clientId, name, seat }, reply) => {
+  socket.on('join-room', ({ code, clientId, name }, reply) => {
     const room = rooms.get(String(code).toUpperCase())
     if (!room) return reply({ ok: false, error: '没找到这个房间号' })
     if (room.phase !== 'lobby' && !room.players.has(clientId)) return reply({ ok: false, error: '游戏已经开始，暂时不能加入' })
     try {
-      joinRoom(socket, room, { clientId, name, seat })
-      event(room, `${seat} 号 ${name} 加入了房间。`)
+      const player = joinRoom(socket, room, { clientId, name })
+      event(room, `${player.seat} 号 ${player.name} 加入了房间。`)
       broadcast(room)
-      reply({ ok: true, code: room.code })
+      reply({ ok: true, code: room.code, seat: player.seat })
     } catch (error) {
       reply({ ok: false, error: error instanceof Error ? error.message : '加入失败' })
     }
@@ -367,15 +367,17 @@ io.on('connection', (socket) => {
   })
 })
 
-function joinRoom(socket, room, { clientId, name, seat }) {
+function joinRoom(socket, room, { clientId, name }) {
   const existing = room.players.get(clientId)
-  const numericSeat = Number(seat)
-  if (!existing && [...room.players.values()].some((player) => player.seat === numericSeat)) throw new Error('这个座位已经有人了')
-  const player = existing ?? { clientId, name: String(name).slice(0, 12) || '玩家', seat: numericSeat, alive: true, ready: false, role: null, nightDone: false, nightResult: null, sockets: new Set() }
-  if (existing && room.phase === 'lobby') { player.name = String(name).slice(0, 12) || player.name; player.seat = numericSeat }
+  const occupiedSeats = new Set([...room.players.values()].map((player) => player.seat))
+  const availableSeat = Array.from({ length: 9 }, (_, index) => index + 1).find((seat) => !occupiedSeats.has(seat))
+  if (!existing && !availableSeat) throw new Error('房间已满，9 个座位都已入座')
+  const player = existing ?? { clientId, name: String(name).slice(0, 12) || '玩家', seat: availableSeat, alive: true, ready: false, role: null, nightDone: false, nightResult: null, sockets: new Set() }
+  if (existing && room.phase === 'lobby') player.name = String(name).slice(0, 12) || player.name
   player.sockets.add(socket.id)
   room.players.set(clientId, player)
   socket.join(room.code)
+  return player
 }
 
 httpServer.listen(port, '0.0.0.0', () => {

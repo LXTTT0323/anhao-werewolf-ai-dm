@@ -23,4 +23,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/lxttt0323/anhao-werewolf-ai-dm:latest
+          tags: ghcr.io/lxttt0323/anhao-werewolf-ai-dm:${{ github.sha }}

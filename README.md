@@ -18,7 +18,7 @@ In a second terminal, run `npm run server`. The development site runs on `http:/
 This repository includes `render.yaml`. Create a Render Web Service from the repository and Render will run:
 
 ```bash
-npm ci && npm run build
+npm install && npm run build
 npm run start
 ```
 

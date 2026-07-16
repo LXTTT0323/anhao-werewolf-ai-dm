@@ -3,10 +3,10 @@ services:
     name: anhao-werewolf-ai-dm
     runtime: node
     plan: free
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install && npm run build
     startCommand: npm run start
     healthCheckPath: /
-    autoDeploy: false
+    autoDeploy: true
     envVars:
       - key: NODE_VERSION
         value: 22

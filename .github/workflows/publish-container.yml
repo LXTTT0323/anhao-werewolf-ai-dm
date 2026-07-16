@@ -24,7 +24,3 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/lxttt0323/anhao-werewolf-ai-dm:latest
-      - name: Make image public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh api --method PATCH "/user/packages/container/anhao-werewolf-ai-dm" -f visibility=public

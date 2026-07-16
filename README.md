@@ -2,6 +2,8 @@
 
 Multiplayer Werewolf for phones: private identities and night actions, host controls, real-time rooms, speech transcription, and AI catch-up summaries in one HTTPS service.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/LXTTT0323/anhao-werewolf-ai-dm)
+
 ## Run locally
 
 ```bash

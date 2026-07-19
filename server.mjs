@@ -82,7 +82,7 @@ const httpServer = createServer(async (request, response) => {
           temperature: 0.1,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: '你是狼人杀离席补课助手。只总结输入的公开事件，绝不推测身份或夜晚行动。绝不改变游戏状态词：出局必须保留为出局。只输出 {"recap":[{"time":"HH:MM","text":"..."}]}。' },
+            { role: 'system', content: '你是狼人杀离席补课助手。只总结输入的公开事件，绝不推测身份或夜晚行动。绝不改变游戏状态词：出局必须保留为出局。只输出合法 JSON：{"recap":[{"time":"HH:MM","text":"..."}]}。' },
             { role: 'user', content: JSON.stringify({ events }) },
           ],
         }),

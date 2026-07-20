@@ -37,7 +37,9 @@ const clientId = (() => {
   localStorage.setItem(storageKey, next)
   return next
 })()
-const savedRoomKey = `anHaoRoom:${new URLSearchParams(location.search).get('device') ?? 'default'}`
+const launchParams = new URLSearchParams(location.search)
+const scannedRoomCode = launchParams.get('room')?.toUpperCase() ?? ''
+const savedRoomKey = `anHaoRoom:${launchParams.get('device') ?? 'default'}`
 
 const blobToBase64 = (blob: Blob) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader()
@@ -77,6 +79,7 @@ function App() {
     })
     liveSocket.on('connect', () => {
       const rememberedRoom = localStorage.getItem(savedRoomKey)
+      if (scannedRoomCode && scannedRoomCode !== rememberedRoom) return
       if (!rememberedRoom) return
       setReconnecting(true)
       liveSocket.emit('resume-room', { code: rememberedRoom, clientId }, (result: { ok: boolean }) => {

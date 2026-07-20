@@ -83,7 +83,7 @@ async function recap(request, response) {
   try {
     if (!process.env.OPENAI_API_KEY) throw new Error('AI 补课尚未配置 API Key')
     const { events = [] } = await readBody(request, 300_000)
-    const publicEvents = Array.isArray(events) ? events.slice(0, 30).map((item) => ({
+    const publicEvents = Array.isArray(events) ? events.slice(0, 8).map((item) => ({
       time: String(item.time ?? ''), text: String(item.text ?? '').slice(0, 500),
     })) : []
     const completion = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -92,7 +92,7 @@ async function recap(request, response) {
       body: JSON.stringify({
         model: 'gpt-4o-mini', temperature: 0.1, response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: '你是狼人杀离席补课助手。只总结输入的公开事件，绝不推测身份、夜晚行动或未公开投票。按时间从早到晚给出不超过四条要点。只输出合法 JSON：{"recap":[{"time":"HH:MM","text":"..."}]}' },
+          { role: 'system', content: '你是狼人杀离席补课助手。只总结输入的公开事件，绝不推测身份、夜晚行动或未公开投票。重点必须覆盖最近发生的公开发言、出局、投票或阶段变化；不要用开局和进房信息占满结果。按时间从早到晚给出不超过四条要点。只输出合法 JSON：{"recap":[{"time":"HH:MM","text":"..."}]}' },
           { role: 'user', content: JSON.stringify({ events: publicEvents.reverse() }) },
         ],
       }),

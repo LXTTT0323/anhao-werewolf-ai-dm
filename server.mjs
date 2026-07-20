@@ -28,6 +28,7 @@ let persistQueue = Promise.resolve()
 
 const httpServer = createServer(async (request, response) => {
   if (request.method === 'POST' && request.url === '/api/transcribe') return transcribe(request, response)
+  if (request.method === 'POST' && request.url === '/api/note') return addNote(request, response)
   if (request.method === 'POST' && request.url === '/api/recap') return recap(request, response)
   serveStatic(request, response)
 })
@@ -77,6 +78,22 @@ async function transcribe(request, response) {
   } catch (error) {
     send(response, 400, { error: error instanceof Error ? error.message : '无法转写语音' })
   }
+}
+
+async function addNote(request, response) {
+  try {
+    const { roomCode, clientId, text } = await readBody(request, 30_000)
+    const room = rooms.get(String(roomCode).toUpperCase())
+    const player = room?.players.get(clientId)
+    const note = String(text ?? '').trim().slice(0, 500)
+    if (!room || !player || room.phase !== 'day' || !player.alive) throw new Error('当前不能记录发言')
+    if (room.speakerSeat && room.speakerSeat !== player.seat) throw new Error(`当前轮到 ${room.speakerSeat} 号发言`)
+    if (!note) throw new Error('请先输入发言内容')
+    event(room, `${player.seat} 号发言：${note}`)
+    touch(room)
+    broadcast(room)
+    send(response, 200, { ok: true })
+  } catch (error) { send(response, 400, { error: error instanceof Error ? error.message : '无法记录发言' }) }
 }
 
 async function recap(request, response) {

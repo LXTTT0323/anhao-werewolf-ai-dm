@@ -63,9 +63,13 @@ function App() {
   const [witchMode, setWitchMode] = useState<'save' | 'poison'>('save')
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
+  const [recordSeconds, setRecordSeconds] = useState(0)
+  const [typedSpeech, setTypedSpeech] = useState('')
+  const [savingTypedSpeech, setSavingTypedSpeech] = useState(false)
   const [reconnecting, setReconnecting] = useState(false)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  const recordTimerRef = useRef<number | null>(null)
   const narrationKeyRef = useRef('')
 
   const alivePlayers = useMemo(() => room?.players.filter((player) => player.alive) ?? [], [room])
@@ -184,6 +188,7 @@ function App() {
     if (!room || !me) return
     if (recorderRef.current?.state === 'recording') {
       recorderRef.current.stop()
+      if (recordTimerRef.current) window.clearInterval(recordTimerRef.current)
       setRecording(false)
       return
     }
@@ -207,8 +212,23 @@ function App() {
       }
       recorderRef.current = recorder
       recorder.start()
+      setRecordSeconds(0)
+      recordTimerRef.current = window.setInterval(() => setRecordSeconds((seconds) => {
+        if (seconds >= 119) recorder.stop()
+        return seconds + 1
+      }), 1000)
       setRecording(true)
     } catch { setError('请允许浏览器使用麦克风') }
+  }
+  const submitTypedSpeech = async () => {
+    if (!room || !typedSpeech.trim()) return
+    setSavingTypedSpeech(true)
+    try {
+      const response = await fetch('/api/note', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roomCode: room.code, clientId, text: typedSpeech }) })
+      const result = await response.json() as { error?: string }
+      if (!response.ok) setError(result.error ?? '记录失败')
+      else setTypedSpeech('')
+    } catch { setError('文字记录上传失败') } finally { setSavingTypedSpeech(false) }
   }
 
   if (!room || !me) return <EntryScreen name={name} roomInput={roomInput} gameMode={gameMode} error={error} setName={setName} setRoomInput={setRoomInput} setGameMode={setGameMode} createRoom={createRoom} joinRoom={joinRoom} />
@@ -218,7 +238,7 @@ function App() {
     <RoomHeader room={room} me={me} name={name} mode={mode} reconnecting={reconnecting} setMode={setMode} leaveRoom={leaveRoom} />
     {isControl
       ? <ControlDesk room={room} alivePlayers={alivePlayers} qrUrl={qrUrl} error={error} startGame={startGame} advance={advance} nextSpeaker={nextSpeaker} speak={speak} />
-      : <PlayerDesk room={room} me={me} alivePlayers={alivePlayers} error={error} witchMode={witchMode} setWitchMode={setWitchMode} submitNight={submitNight} submitVote={submitVote} toggleReady={toggleReady} recordSpeech={recordSpeech} recording={recording} transcribing={transcribing} generateRecap={generateRecap} recap={recap} recapLoading={recapLoading} />}
+      : <PlayerDesk room={room} me={me} alivePlayers={alivePlayers} error={error} witchMode={witchMode} setWitchMode={setWitchMode} submitNight={submitNight} submitVote={submitVote} toggleReady={toggleReady} recordSpeech={recordSpeech} recording={recording} recordSeconds={recordSeconds} transcribing={transcribing} typedSpeech={typedSpeech} setTypedSpeech={setTypedSpeech} submitTypedSpeech={submitTypedSpeech} savingTypedSpeech={savingTypedSpeech} generateRecap={generateRecap} recap={recap} recapLoading={recapLoading} />}
   </main>
 }
 
@@ -320,8 +340,8 @@ function NarrationDeck({ phase, speak }: { phase: Room['phase']; speak: (text: s
   return <section className="narration-deck"><div><Volume2 size={18} /><span>线下主持口令</span><small>点击后由主持设备直接播报</small></div><div>{cues.map((cue) => <button key={cue} onClick={() => speak(cue)}>{cue}</button>)}</div></section>
 }
 
-function PlayerDesk({ room, me, alivePlayers, error, witchMode, setWitchMode, submitNight, submitVote, toggleReady, recordSpeech, recording, transcribing, generateRecap, recap, recapLoading }: {
-  room: Room; me: Me; alivePlayers: Player[]; error: string; witchMode: 'save' | 'poison'; setWitchMode: (mode: 'save' | 'poison') => void; submitNight: (action: object) => void; submitVote: (target: number) => void; toggleReady: () => void; recordSpeech: () => void; recording: boolean; transcribing: boolean; generateRecap: () => void; recap: Event[] | null; recapLoading: boolean
+function PlayerDesk({ room, me, alivePlayers, error, witchMode, setWitchMode, submitNight, submitVote, toggleReady, recordSpeech, recording, recordSeconds, transcribing, typedSpeech, setTypedSpeech, submitTypedSpeech, savingTypedSpeech, generateRecap, recap, recapLoading }: {
+  room: Room; me: Me; alivePlayers: Player[]; error: string; witchMode: 'save' | 'poison'; setWitchMode: (mode: 'save' | 'poison') => void; submitNight: (action: object) => void; submitVote: (target: number) => void; toggleReady: () => void; recordSpeech: () => void; recording: boolean; recordSeconds: number; transcribing: boolean; typedSpeech: string; setTypedSpeech: (value: string) => void; submitTypedSpeech: () => void; savingTypedSpeech: boolean; generateRecap: () => void; recap: Event[] | null; recapLoading: boolean
 }) {
   const candidates = alivePlayers.filter((player) => player.seat !== me.seat)
   const roleType = me.role === '狼人' ? '狼人阵营' : me.role === '村民' ? '好人阵营' : '神职'
@@ -337,7 +357,7 @@ function PlayerDesk({ room, me, alivePlayers, error, witchMode, setWitchMode, su
       {room.phase === 'lobby' && <button className={`button ready ${me.ready ? 'ready-done' : ''}`} onClick={toggleReady}>{me.ready ? <Check size={18} /> : <ShieldCheck size={18} />}{me.ready ? '已准备，等待主持开始' : '我已入座，点击准备'}</button>}
       {room.phase === 'night' && me.alive && <NightAction me={me} candidates={candidates} witchMode={witchMode} setWitchMode={setWitchMode} submit={submitRoleAction} />}
       {room.phase === 'vote' && me.alive && <VoteAction me={me} candidates={candidates} submitVote={submitVote} />}
-      {room.phase === 'day' && me.alive && <SpeechAction isSpeaker={room.speakerSeat === me.seat} speakerSeat={room.speakerSeat} recording={recording} transcribing={transcribing} recordSpeech={recordSpeech} />}
+      {room.phase === 'day' && me.alive && <SpeechAction isSpeaker={room.speakerSeat === me.seat} speakerSeat={room.speakerSeat} recording={recording} recordSeconds={recordSeconds} transcribing={transcribing} recordSpeech={recordSpeech} typedSpeech={typedSpeech} setTypedSpeech={setTypedSpeech} submitTypedSpeech={submitTypedSpeech} savingTypedSpeech={savingTypedSpeech} />}
       {me.nightResult && <div className="notice result"><Eye size={17} />查验结果：{me.nightResult}</div>}
       {error && <p className="error-message">{error}</p>}
     </section>
@@ -370,9 +390,10 @@ function VoteAction({ me, candidates, submitVote }: { me: Me; candidates: Player
   return <section className="action-card"><span>放逐投票</span><h2>{me.hasVoted ? '已投票，结算前可修改' : '选择一名存活玩家'}</h2><SeatChoices candidates={candidates} onChoose={submitVote} /></section>
 }
 
-function SpeechAction({ isSpeaker, speakerSeat, recording, transcribing, recordSpeech }: { isSpeaker: boolean; speakerSeat: number | null; recording: boolean; transcribing: boolean; recordSpeech: () => void }) {
+function SpeechAction({ isSpeaker, speakerSeat, recording, recordSeconds, transcribing, recordSpeech, typedSpeech, setTypedSpeech, submitTypedSpeech, savingTypedSpeech }: { isSpeaker: boolean; speakerSeat: number | null; recording: boolean; recordSeconds: number; transcribing: boolean; recordSpeech: () => void; typedSpeech: string; setTypedSpeech: (value: string) => void; submitTypedSpeech: () => void; savingTypedSpeech: boolean }) {
   if (!isSpeaker) return <div className="notice done"><UsersRound size={18} />{speakerSeat ? `当前轮到 ${speakerSeat} 号发言。` : '本轮发言已完成，等待主持进入投票。'}</div>
-  return <section className="action-card speech-action"><span><Mic size={15} />轮到你发言</span><h2>开始录下你的发言</h2><p>结束录音后，AI 会将内容转成全员可见的公开记录。</p><button className={`button ${recording ? 'danger' : 'primary'}`} onClick={recordSpeech} disabled={transcribing}>{recording ? <Square size={16} fill="currentColor" /> : <Mic size={16} />}{transcribing ? 'AI 正在转写...' : recording ? '结束录音并转写' : '开始记录我的发言'}</button></section>
+  const clock = `${String(Math.floor(recordSeconds / 60)).padStart(2, '0')}:${String(recordSeconds % 60).padStart(2, '0')}`
+  return <section className="action-card speech-action"><span><Mic size={15} />轮到你发言</span><h2>{recording ? `正在记录 ${clock}` : '开始录下你的发言'}</h2><p>单次最多两分钟；结束后 AI 会将内容写入全员可见的公开记录。</p><button className={`button ${recording ? 'danger' : 'primary'}`} onClick={recordSpeech} disabled={transcribing}>{recording ? <Square size={16} fill="currentColor" /> : <Mic size={16} />}{transcribing ? 'AI 正在转写...' : recording ? '结束录音并转写' : '开始记录我的发言'}</button><div className="typed-speech"><span>无法录音？直接记录文字</span><textarea value={typedSpeech} maxLength={500} onChange={(event) => setTypedSpeech(event.target.value)} placeholder="输入本次公开发言" /><button className="button secondary small" disabled={!typedSpeech.trim() || savingTypedSpeech} onClick={submitTypedSpeech}>{savingTypedSpeech ? '记录中...' : '公开这段文字'}</button></div></section>
 }
 
 function SeatChoices({ candidates, onChoose }: { candidates: Player[]; onChoose: (seat: number) => void }) {

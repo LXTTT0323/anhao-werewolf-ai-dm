@@ -163,7 +163,7 @@ function publicRoom(room) {
   }, {}) : null
   const currentSpeaker = room.speakerSeat ? room.players.get(room.seatIndex[room.speakerSeat]) : null
   return {
-    code: room.code, joinUrl: `${clientUrl}/?room=${room.code}`, phase: room.phase, day: room.day,
+    code: room.code, joinUrl: `${clientUrl}/?room=${room.code}`, phase: room.phase, day: room.day, gameMode: room.gameMode,
     players: [...room.players.values()].map((player) => ({
       name: player.name, seat: player.seat, alive: player.alive, ready: player.ready, online: player.sockets.size > 0,
     })).sort((a, b) => a.seat - b.seat),
@@ -262,10 +262,10 @@ function guardHost(room, clientId) { guardRoom(room); if (room.hostId !== client
 function normalizeName(value) { return String(value ?? '').trim().slice(0, 12) || '玩家' }
 
 io.on('connection', (socket) => {
-  socket.on('create-room', ({ clientId, name }, reply) => {
+  socket.on('create-room', ({ clientId, name, gameMode }, reply) => {
     const code = roomCode()
     const room = {
-      code, hostId: clientId, phase: 'lobby', day: 0, players: new Map(), seatIndex: {}, events: [], votes: {},
+      code, hostId: clientId, phase: 'lobby', day: 0, gameMode: gameMode === 'online' ? 'online' : 'offline', players: new Map(), seatIndex: {}, events: [], votes: {},
       votesRevealed: false, winner: null, speakerSeat: null, night: { wolfTarget: null, witchSave: false, witchPoison: null },
       createdAt: now(), updatedAt: now(),
     }

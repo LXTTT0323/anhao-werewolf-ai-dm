@@ -3,14 +3,14 @@ import { io, type Socket } from 'socket.io-client'
 import QRCode from 'qrcode'
 import {
   Check, ChevronRight, ClipboardList, Copy, Crown, Eye, Info, LockKeyhole, LogOut, Mic,
-  MoonStar, Play, QrCode, ShieldCheck, Sparkles, Square, Sun, UserRoundCheck, UsersRound, Vote,
+  Headphones, MoonStar, Play, QrCode, ShieldCheck, Sparkles, Square, Sun, UserRoundCheck, UsersRound, Volume2, Vote,
 } from 'lucide-react'
 import './App.css'
 
 type Player = { name: string; seat: number; alive: boolean; ready: boolean; online: boolean }
 type Event = { time: string; text: string }
 type Room = {
-  code: string; joinUrl: string; phase: 'lobby' | 'night' | 'day' | 'vote' | 'ended'; day: number
+  code: string; joinUrl: string; phase: 'lobby' | 'night' | 'day' | 'vote' | 'ended'; day: number; gameMode: 'offline' | 'online'
   players: Player[]; nightDoneCount: number; events: Event[]; tally: Record<string, number> | null
   votesRevealed: boolean; winner: string | null; voteCount: number; speakerSeat: number | null; speakerName: string | null
 }
@@ -55,6 +55,7 @@ function App() {
   const [mode, setMode] = useState<'control' | 'play'>('control')
   const [name, setName] = useState(() => localStorage.getItem('anHaoName') ?? '')
   const [roomInput, setRoomInput] = useState(() => new URLSearchParams(location.search).get('room') ?? '')
+  const [gameMode, setGameMode] = useState<'offline' | 'online'>('offline')
   const [qrUrl, setQrUrl] = useState('')
   const [error, setError] = useState('')
   const [recap, setRecap] = useState<Event[] | null>(null)
@@ -65,6 +66,7 @@ function App() {
   const [reconnecting, setReconnecting] = useState(false)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  const narrationKeyRef = useRef('')
 
   const alivePlayers = useMemo(() => room?.players.filter((player) => player.alive) ?? [], [room])
 
@@ -96,6 +98,30 @@ function App() {
     QRCode.toDataURL(room.joinUrl, { width: 320, margin: 1, color: { dark: '#132d32', light: '#ffffff' } }).then(setQrUrl)
   }, [room?.joinUrl])
 
+  const speak = (text: string) => {
+    if (!('speechSynthesis' in window)) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = 'zh-CN'
+    utterance.rate = 0.9
+    window.speechSynthesis.speak(utterance)
+  }
+
+  useEffect(() => {
+    if (!room || !me?.isHost || room.gameMode !== 'offline') return
+    const key = `${room.phase}-${room.day}`
+    if (narrationKeyRef.current === key) return
+    narrationKeyRef.current = key
+    const phrases = {
+      lobby: '请玩家入座并准备。',
+      night: '天黑请闭眼。所有玩家请闭眼，今晚行动请根据自己的手机提示进行。',
+      day: '天亮了，请睁眼。现在开始白天讨论。',
+      vote: '讨论结束。请所有存活玩家在自己的手机上投票。',
+      ended: '本局游戏结束，请查看复盘。',
+    }
+    speak(phrases[room.phase])
+  }, [room, me?.isHost])
+
   const emit = (event: string, payload: object) => new Promise<{ ok: boolean; error?: string }>((resolve) => {
     if (!socket?.connected) return resolve({ ok: false, error: '连接暂时中断，正在尝试恢复' })
     socket.emit(event, payload, resolve)
@@ -104,7 +130,7 @@ function App() {
   const createRoom = async () => {
     if (!name.trim()) return setError('先填一个昵称')
     rememberName()
-    const result = await emit('create-room', { clientId, name: name.trim() })
+    const result = await emit('create-room', { clientId, name: name.trim(), gameMode })
     if (!result.ok) setError(result.error ?? '创建失败，请稍后再试')
   }
   const joinRoom = async () => {
@@ -185,20 +211,20 @@ function App() {
     } catch { setError('请允许浏览器使用麦克风') }
   }
 
-  if (!room || !me) return <EntryScreen name={name} roomInput={roomInput} error={error} setName={setName} setRoomInput={setRoomInput} createRoom={createRoom} joinRoom={joinRoom} />
+  if (!room || !me) return <EntryScreen name={name} roomInput={roomInput} gameMode={gameMode} error={error} setName={setName} setRoomInput={setRoomInput} setGameMode={setGameMode} createRoom={createRoom} joinRoom={joinRoom} />
 
   const isControl = me.isHost && mode === 'control'
   return <main className="app-shell">
     <RoomHeader room={room} me={me} name={name} mode={mode} reconnecting={reconnecting} setMode={setMode} leaveRoom={leaveRoom} />
     {isControl
-      ? <ControlDesk room={room} alivePlayers={alivePlayers} qrUrl={qrUrl} error={error} startGame={startGame} advance={advance} nextSpeaker={nextSpeaker} />
+      ? <ControlDesk room={room} alivePlayers={alivePlayers} qrUrl={qrUrl} error={error} startGame={startGame} advance={advance} nextSpeaker={nextSpeaker} speak={speak} />
       : <PlayerDesk room={room} me={me} alivePlayers={alivePlayers} error={error} witchMode={witchMode} setWitchMode={setWitchMode} submitNight={submitNight} submitVote={submitVote} toggleReady={toggleReady} recordSpeech={recordSpeech} recording={recording} transcribing={transcribing} generateRecap={generateRecap} recap={recap} recapLoading={recapLoading} />}
   </main>
 }
 
-function EntryScreen({ name, roomInput, error, setName, setRoomInput, createRoom, joinRoom }: {
-  name: string; roomInput: string; error: string
-  setName: (value: string) => void; setRoomInput: (value: string) => void
+function EntryScreen({ name, roomInput, gameMode, error, setName, setRoomInput, setGameMode, createRoom, joinRoom }: {
+  name: string; roomInput: string; gameMode: 'offline' | 'online'; error: string
+  setName: (value: string) => void; setRoomInput: (value: string) => void; setGameMode: (mode: 'offline' | 'online') => void
   createRoom: () => void; joinRoom: () => void
 }) {
   return <main className="entry-page">
@@ -220,6 +246,10 @@ function EntryScreen({ name, roomInput, error, setName, setRoomInput, createRoom
       <section className="entry-card" aria-label="进入狼人杀房间">
         <div className="card-heading"><span>开始一局</span><p>扫码会自动带入房间号，确认昵称后系统自动分配空位</p></div>
         <label>你的昵称<input value={name} maxLength={12} onChange={(event) => setName(event.target.value)} placeholder="例如：小北" /></label>
+        <fieldset className="game-mode-picker"><legend>玩法模式</legend><div>
+          <button className={gameMode === 'offline' ? 'active' : ''} type="button" onClick={() => setGameMode('offline')}><Volume2 size={16} /><span>线下同桌<small>主持设备播报闭眼口令</small></span></button>
+          <button className={gameMode === 'online' ? 'active' : ''} type="button" onClick={() => setGameMode('online')}><Headphones size={16} /><span>线上远程<small>每人按手机私密操作</small></span></button>
+        </div></fieldset>
         <div className="auto-seat-note"><UsersRound size={16} /><span>创建或加入后，自动分配当前最小空位</span></div>
         <button className="button primary" onClick={createRoom}><Crown size={18} />创建房间并自动入座</button>
         <div className="divider"><span>或加入已有房间</span></div>
@@ -243,7 +273,7 @@ function RoomHeader({ room, me, name, mode, reconnecting, setMode, leaveRoom }: 
   </header>
 }
 
-function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance, nextSpeaker }: { room: Room; alivePlayers: Player[]; qrUrl: string; error: string; startGame: () => void; advance: () => void; nextSpeaker: () => void }) {
+function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance, nextSpeaker, speak }: { room: Room; alivePlayers: Player[]; qrUrl: string; error: string; startGame: () => void; advance: () => void; nextSpeaker: () => void; speak: (text: string) => void }) {
   const phase = phases[room.phase]
   const PhaseIcon = phase.icon
   const latestJoin = room.events.find((item) => item.text.includes('加入了房间'))
@@ -271,6 +301,7 @@ function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance, nex
         <section className="activity-panel"><div className="panel-header"><span>公开记录</span><ClipboardList size={17} /></div>{room.events.length ? room.events.slice(0, 5).map((event) => <p className="event-row" key={`${event.time}-${event.text}`}><time>{event.time}</time><span>{event.text}</span></p>) : <p className="empty-copy">游戏开始后，公开事件会出现在这里。</p>}</section>
         <section className="share-panel"><div><span>扫码自动入房</span><b>{room.code}</b><p>扫码后自动带入房间号，并分配空位</p><div className="join-live"><strong>{room.players.length} / 9 已入房</strong><small>{latestJoin ? latestJoin.text : '等待下一位玩家加入'}</small></div><button className="text-button" onClick={copyJoinUrl}><Copy size={14} />复制邀请链接</button></div>{qrUrl ? <img src={qrUrl} alt="加入房间二维码" /> : <QrCode size={68} />}</section>
       </div>
+      {room.gameMode === 'offline' && <NarrationDeck phase={room.phase} speak={speak} />}
     </section>
     <aside className="info-rail">
       <div className="rail-title"><span>本局信息</span><Info size={16} /></div>
@@ -279,6 +310,14 @@ function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance, nex
       {room.tally && <section><span>公开票型</span>{Object.entries(room.tally).map(([seat, count]) => <p key={seat}>{seat} 号 · {count} 票</p>)}</section>}
     </aside>
   </div>
+}
+
+function NarrationDeck({ phase, speak }: { phase: Room['phase']; speak: (text: string) => void }) {
+  const cues = phase === 'night'
+    ? ['天黑请闭眼，所有玩家请闭眼。', '狼人请睁眼。', '狼人请闭眼。', '预言家请睁眼。', '预言家请闭眼。', '女巫请睁眼。', '女巫请闭眼。']
+    : phase === 'day' ? ['天亮了，请睁眼。', '请当前发言人开始发言。']
+      : phase === 'vote' ? ['请所有存活玩家开始投票。'] : ['请玩家入座并准备。']
+  return <section className="narration-deck"><div><Volume2 size={18} /><span>线下主持口令</span><small>点击后由主持设备直接播报</small></div><div>{cues.map((cue) => <button key={cue} onClick={() => speak(cue)}>{cue}</button>)}</div></section>
 }
 
 function PlayerDesk({ room, me, alivePlayers, error, witchMode, setWitchMode, submitNight, submitVote, toggleReady, recordSpeech, recording, transcribing, generateRecap, recap, recapLoading }: {
@@ -291,6 +330,8 @@ function PlayerDesk({ room, me, alivePlayers, error, witchMode, setWitchMode, su
     <section className="player-main">
       <div className="player-intro"><p className="eyebrow"><LockKeyhole size={14} />仅你可见</p><h1>{room.phase === 'lobby' ? '等大家入座' : me.role}</h1><p>{room.phase === 'lobby' ? '开始游戏后，你会在这里收到专属身份与私密行动。' : me.role === '狼人' ? `狼队成员：${me.wolfTeam.map((player) => `${player.seat}号 ${player.name}`).join('、')}` : me.role === '预言家' ? '每晚可以查验一名存活玩家。' : me.role === '女巫' ? '每晚可以选择救人或使用毒药。' : '白天发言、观察，并为自己的判断投票。'}</p></div>
       {room.phase !== 'lobby' && <span className="role-badge">{roleType}</span>}
+      {room.gameMode === 'offline' && room.phase === 'night' && <div className="eyes-closed"><MoonStar size={18} /><div><strong>天黑请闭眼</strong><span>请跟随主持设备的语音口令；轮到你的角色时再查看并操作手机。</span></div></div>}
+      {room.gameMode === 'online' && room.phase === 'night' && <div className="mode-note"><Headphones size={17} />线上模式：请安静完成你的私密行动。</div>}
       {room.phase === 'lobby' && <LobbyStatus room={room} me={me} />}
       {!me.alive && <div className="notice dead"><Eye size={17} />你已出局，本局仍可查看公开记录。</div>}
       {room.phase === 'lobby' && <button className={`button ready ${me.ready ? 'ready-done' : ''}`} onClick={toggleReady}>{me.ready ? <Check size={18} /> : <ShieldCheck size={18} />}{me.ready ? '已准备，等待主持开始' : '我已入座，点击准备'}</button>}

@@ -2,22 +2,22 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import QRCode from 'qrcode'
 import {
-  Check, ChevronRight, ClipboardList, Copy, Crown, Eye, Info, LockKeyhole, Mic,
-  MoonStar, Play, QrCode, ShieldCheck, Sparkles, Square, Sun, UsersRound, Vote,
+  Check, ChevronRight, ClipboardList, Copy, Crown, Eye, Info, LockKeyhole, LogOut, Mic,
+  MoonStar, Play, QrCode, ShieldCheck, Sparkles, Square, Sun, UserRoundCheck, UsersRound, Vote,
 } from 'lucide-react'
 import './App.css'
 
-type Player = { name: string; seat: number; alive: boolean; ready: boolean }
+type Player = { name: string; seat: number; alive: boolean; ready: boolean; online: boolean }
 type Event = { time: string; text: string }
 type Room = {
   code: string; joinUrl: string; phase: 'lobby' | 'night' | 'day' | 'vote' | 'ended'; day: number
   players: Player[]; nightDoneCount: number; events: Event[]; tally: Record<string, number> | null
-  votesRevealed: boolean; winner: string | null
+  votesRevealed: boolean; winner: string | null; voteCount: number; speakerSeat: number | null; speakerName: string | null
 }
 type Me = {
   seat: number; role: string | null; alive: boolean; ready: boolean; nightDone: boolean
   nightResult: string | null; wolfTeam: { seat: number; name: string }[]; witchTarget: number | null
-  hasVoted: boolean; isHost: boolean
+  hasVoted: boolean; hasAntidote: boolean; hasPoison: boolean; isHost: boolean
 }
 
 const phases = {
@@ -37,6 +37,7 @@ const clientId = (() => {
   localStorage.setItem(storageKey, next)
   return next
 })()
+const savedRoomKey = `anHaoRoom:${new URLSearchParams(location.search).get('device') ?? 'default'}`
 
 const blobToBase64 = (blob: Blob) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader()
@@ -59,18 +60,30 @@ function App() {
   const [witchMode, setWitchMode] = useState<'save' | 'poison'>('save')
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
+  const [reconnecting, setReconnecting] = useState(false)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
 
   const alivePlayers = useMemo(() => room?.players.filter((player) => player.alive) ?? [], [room])
 
   useEffect(() => {
-    const liveSocket = io({ path: '/socket.io' })
+    const liveSocket = io({ path: '/socket.io', reconnection: true })
     liveSocket.on('room-state', ({ room: nextRoom, me: nextMe }) => {
       setRoom(nextRoom)
       setMe(nextMe)
+      localStorage.setItem(savedRoomKey, nextRoom.code)
+      setReconnecting(false)
       setError('')
     })
+    liveSocket.on('connect', () => {
+      const rememberedRoom = localStorage.getItem(savedRoomKey)
+      if (!rememberedRoom) return
+      setReconnecting(true)
+      liveSocket.emit('resume-room', { code: rememberedRoom, clientId }, (result: { ok: boolean }) => {
+        if (!result.ok) { localStorage.removeItem(savedRoomKey); setReconnecting(false) }
+      })
+    })
+    liveSocket.on('disconnect', () => setReconnecting(true))
     setSocket(liveSocket)
     return () => { liveSocket.close() }
   }, [])
@@ -81,7 +94,8 @@ function App() {
   }, [room?.joinUrl])
 
   const emit = (event: string, payload: object) => new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    socket?.emit(event, payload, resolve)
+    if (!socket?.connected) return resolve({ ok: false, error: '连接暂时中断，正在尝试恢复' })
+    socket.emit(event, payload, resolve)
   })
   const rememberName = () => localStorage.setItem('anHaoName', name.trim())
   const createRoom = async () => {
@@ -104,6 +118,10 @@ function App() {
     const result = await emit('advance-phase', { code: room?.code, clientId })
     if (!result.ok) setError(result.error ?? '暂时无法推进流程')
   }
+  const nextSpeaker = async () => {
+    const result = await emit('next-speaker', { code: room?.code, clientId })
+    if (!result.ok) setError(result.error ?? '无法切换发言人')
+  }
   const submitNight = async (action: object) => {
     const result = await emit('night-action', { code: room?.code, clientId, action })
     if (!result.ok) setError(result.error ?? '行动提交失败')
@@ -115,6 +133,14 @@ function App() {
   const toggleReady = async () => {
     const result = await emit('set-ready', { code: room?.code, clientId, ready: !me?.ready })
     if (!result.ok) setError(result.error ?? '准备状态更新失败')
+  }
+  const leaveRoom = async () => {
+    if (!room || room.phase !== 'lobby') return
+    const result = await emit('leave-room', { code: room.code, clientId })
+    if (!result.ok) return setError(result.error ?? '暂时无法离开')
+    localStorage.removeItem(savedRoomKey)
+    setRoom(null)
+    setMe(null)
   }
   const generateRecap = async () => {
     if (!room) return
@@ -160,9 +186,9 @@ function App() {
 
   const isControl = me.isHost && mode === 'control'
   return <main className="app-shell">
-    <RoomHeader room={room} me={me} name={name} mode={mode} setMode={setMode} />
+    <RoomHeader room={room} me={me} name={name} mode={mode} reconnecting={reconnecting} setMode={setMode} leaveRoom={leaveRoom} />
     {isControl
-      ? <ControlDesk room={room} alivePlayers={alivePlayers} qrUrl={qrUrl} error={error} startGame={startGame} advance={advance} />
+      ? <ControlDesk room={room} alivePlayers={alivePlayers} qrUrl={qrUrl} error={error} startGame={startGame} advance={advance} nextSpeaker={nextSpeaker} />
       : <PlayerDesk room={room} me={me} alivePlayers={alivePlayers} error={error} witchMode={witchMode} setWitchMode={setWitchMode} submitNight={submitNight} submitVote={submitVote} toggleReady={toggleReady} recordSpeech={recordSpeech} recording={recording} transcribing={transcribing} generateRecap={generateRecap} recap={recap} recapLoading={recapLoading} />}
   </main>
 }
@@ -204,21 +230,22 @@ function EntryScreen({ name, roomInput, error, setName, setRoomInput, createRoom
   </main>
 }
 
-function RoomHeader({ room, me, name, mode, setMode }: { room: Room; me: Me; name: string; mode: 'control' | 'play'; setMode: (mode: 'control' | 'play') => void }) {
+function RoomHeader({ room, me, name, mode, reconnecting, setMode, leaveRoom }: { room: Room; me: Me; name: string; mode: 'control' | 'play'; reconnecting: boolean; setMode: (mode: 'control' | 'play') => void; leaveRoom: () => void }) {
   const phase = phases[room.phase]
   return <header className="room-header">
     <div className="brand"><span>W</span><strong>暗号</strong></div>
-    <div className="room-meta"><span className="online-dot" />房间 <b>{room.code}</b><i />第 {room.day || 1} 天 · {phase.label}</div>
+    <div className="room-meta"><span className={`online-dot ${reconnecting ? 'offline-dot' : ''}`} />房间 <b>{room.code}</b><i />第 {room.day || 1} 天 · {reconnecting ? '正在恢复连接' : phase.label}</div>
     {me.isHost && <nav className="mode-switch" aria-label="切换视图"><button className={mode === 'control' ? 'active' : ''} onClick={() => setMode('control')}>主持台</button><button className={mode === 'play' ? 'active' : ''} onClick={() => setMode('play')}>我的玩家页</button></nav>}
-    <div className="profile"><span>{name || '玩家'}</span><b>{me.seat}</b></div>
+    <div className="profile"><span>{name || '玩家'}</span><b>{me.seat}</b>{room.phase === 'lobby' && <button className="icon-button" title="离开等候房" onClick={leaveRoom}><LogOut size={15} /></button>}</div>
   </header>
 }
 
-function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance }: { room: Room; alivePlayers: Player[]; qrUrl: string; error: string; startGame: () => void; advance: () => void }) {
+function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance, nextSpeaker }: { room: Room; alivePlayers: Player[]; qrUrl: string; error: string; startGame: () => void; advance: () => void; nextSpeaker: () => void }) {
   const phase = phases[room.phase]
   const PhaseIcon = phase.icon
   const latestJoin = room.events.find((item) => item.text.includes('加入了房间'))
-  const command = room.phase === 'lobby' ? '发放身份，开始第 1 天' : room.phase === 'night' ? '天亮，结算夜晚' : room.phase === 'day' ? '结束讨论，开始投票' : room.phase === 'vote' ? '结算票型，进入下一天' : ''
+  const command = room.phase === 'lobby' ? '发放身份，开始第 1 夜' : room.phase === 'night' ? '天亮，结算夜晚' : room.phase === 'day' ? '结束讨论，开始投票' : room.phase === 'vote' ? '结算票型，进入下一夜' : ''
+  const canAdvance = room.phase === 'lobby' ? room.players.length >= 3 && room.players.every((player) => player.ready) : room.phase === 'night' ? room.nightDoneCount === alivePlayers.length : room.phase === 'day' ? true : room.phase === 'vote' ? room.voteCount === alivePlayers.length : false
   const copyJoinUrl = () => navigator.clipboard.writeText(room.joinUrl)
   return <div className="workspace">
     <aside className="seat-rail">
@@ -226,15 +253,15 @@ function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance }: {
       <div className="seat-list">{Array.from({ length: 9 }, (_, index) => {
         const player = room.players.find((item) => item.seat === index + 1)
         return <div className={`seat-item ${!player ? 'empty' : ''} ${player && !player.alive ? 'dead' : ''}`} key={index}>
-          <b>{index + 1}</b><span>{player?.name ?? '空位'}</span>{player && <small>{room.phase === 'lobby' ? (player.ready ? '已准备' : '未准备') : player.alive ? '存活' : '出局'}</small>}
+          <b>{index + 1}</b><span>{player?.name ?? '空位'}</span>{player && <small><i className={player.online ? 'seat-online' : 'seat-offline'} />{room.phase === 'lobby' ? (player.ready ? '已准备' : '未准备') : player.alive ? '存活' : '出局'}</small>}
         </div>
       })}</div>
     </aside>
     <section className="control-main">
       <div className="section-top"><div><p className="eyebrow">AI 上帝正在管理本局</p><h1>{room.winner ?? phase.label}</h1><span>{phase.hint}</span></div><div className="phase-icon"><PhaseIcon size={25} /></div></div>
       <section className={`phase-panel ${room.phase}`}>
-        <div className="phase-panel-copy"><span>当前阶段</span><h2>{room.phase === 'lobby' ? '邀请玩家扫码，或输入房间号入座。' : room.phase === 'night' ? '夜晚行动仅会发给对应的玩家。' : room.phase === 'day' ? '玩家的发言将持续写入公开记录。' : room.phase === 'vote' ? '所有存活玩家正从各自设备投票。' : '胜负已结算，可以开始复盘。'}</h2><p>{room.phase === 'lobby' ? '主持人也可以切换到“我的玩家页”，作为正常玩家参与。' : room.phase === 'night' ? `已完成 ${room.nightDoneCount} / ${alivePlayers.length} 个夜晚操作，主持台不会显示私密行动。` : room.phase === 'day' ? '发言人可用自己的手机开始录音，AI 会转写为公共发言记录。' : room.phase === 'vote' ? '每位玩家可以在结算前修改自己的投票。' : '身份、行动和公开时间线会保留在本局页面。'}</p></div>
-        {room.phase !== 'ended' && <button className="button light" onClick={room.phase === 'lobby' ? startGame : advance}>{room.phase === 'lobby' ? <Play size={17} fill="currentColor" /> : <ChevronRight size={18} />}{command}</button>}
+        <div className="phase-panel-copy"><span>当前阶段</span><h2>{room.phase === 'lobby' ? '邀请玩家扫码，或输入房间号入座。' : room.phase === 'night' ? '夜晚行动只显示在对应玩家设备。' : room.phase === 'day' ? (room.speakerSeat ? `现在请 ${room.speakerSeat} 号 ${room.speakerName} 发言。` : '本轮玩家已依次发言完成。') : room.phase === 'vote' ? '所有存活玩家正在各自设备投票。' : '胜负已结算，可以查看本局复盘。'}</h2><p>{room.phase === 'lobby' ? '主持人也可切换到“我的玩家页”，作为正常玩家参与。' : room.phase === 'night' ? `已完成 ${room.nightDoneCount} / ${alivePlayers.length} 个夜晚操作；主持台不显示私密内容。` : room.phase === 'day' ? '只有当前发言人的手机可以录音，AI 会把内容转写为公开记录。' : room.phase === 'vote' ? `已收到 ${room.voteCount} / ${alivePlayers.length} 票；结算前玩家可修改。` : '身份、行动和公开时间线会保留到房间过期。'}</p></div>
+        <div className="phase-actions">{room.phase === 'day' && <button className="button secondary" onClick={nextSpeaker}><UserRoundCheck size={17} />下一位发言</button>}{room.phase !== 'ended' && <button className="button light" disabled={!canAdvance} onClick={room.phase === 'lobby' ? startGame : advance}>{room.phase === 'lobby' ? <Play size={17} fill="currentColor" /> : <ChevronRight size={18} />}{command}</button>}</div>
       </section>
       {error && <p className="error-message workspace-error">{error}</p>}
       <div className="control-grid">
@@ -244,7 +271,7 @@ function ControlDesk({ room, alivePlayers, qrUrl, error, startGame, advance }: {
     </section>
     <aside className="info-rail">
       <div className="rail-title"><span>本局信息</span><Info size={16} /></div>
-      <section><span>游戏配置</span><b>9 人标准局</b><p>3 狼人 · 预言家 · 女巫 · 4 村民</p></section>
+      <section><span>游戏配置</span><b>{room.players.length} 人当前配置</b><p>3-9 人自动配发角色；人数不足时按小局配比发放。</p></section>
       <section><span>隐私状态</span><b>私密信息已隔离</b><p>身份、查验和夜晚行动不会出现在主持台。</p></section>
       {room.tally && <section><span>公开票型</span>{Object.entries(room.tally).map(([seat, count]) => <p key={seat}>{seat} 号 · {count} 票</p>)}</section>}
     </aside>
@@ -266,7 +293,7 @@ function PlayerDesk({ room, me, alivePlayers, error, witchMode, setWitchMode, su
       {room.phase === 'lobby' && <button className={`button ready ${me.ready ? 'ready-done' : ''}`} onClick={toggleReady}>{me.ready ? <Check size={18} /> : <ShieldCheck size={18} />}{me.ready ? '已准备，等待主持开始' : '我已入座，点击准备'}</button>}
       {room.phase === 'night' && me.alive && <NightAction me={me} candidates={candidates} witchMode={witchMode} setWitchMode={setWitchMode} submit={submitRoleAction} />}
       {room.phase === 'vote' && me.alive && <VoteAction me={me} candidates={candidates} submitVote={submitVote} />}
-      {room.phase === 'day' && me.alive && <SpeechAction recording={recording} transcribing={transcribing} recordSpeech={recordSpeech} />}
+      {room.phase === 'day' && me.alive && <SpeechAction isSpeaker={room.speakerSeat === me.seat} speakerSeat={room.speakerSeat} recording={recording} transcribing={transcribing} recordSpeech={recordSpeech} />}
       {me.nightResult && <div className="notice result"><Eye size={17} />查验结果：{me.nightResult}</div>}
       {error && <p className="error-message">{error}</p>}
     </section>
@@ -291,7 +318,7 @@ function LobbyStatus({ room, me }: { room: Room; me: Me }) {
 function NightAction({ me, candidates, witchMode, setWitchMode, submit }: { me: Me; candidates: Player[]; witchMode: 'save' | 'poison'; setWitchMode: (mode: 'save' | 'poison') => void; submit: (target?: number) => void }) {
   if (me.nightDone) return <div className="notice done"><Check size={18} />夜晚行动已提交，等待天亮。</div>
   if (me.role === '村民') return <button className="button primary" onClick={() => submit()}>我已闭眼</button>
-  if (me.role === '女巫') return <section className="action-card"><span>女巫行动</span><h2>{me.witchTarget ? `今夜 ${me.witchTarget} 号倒牌` : '等待狼队行动完成'}</h2><div className="option-tabs"><button className={witchMode === 'save' ? 'active' : ''} onClick={() => setWitchMode('save')}>使用解药</button><button className={witchMode === 'poison' ? 'active' : ''} onClick={() => setWitchMode('poison')}>使用毒药</button></div>{witchMode === 'save' ? <button className="button primary" onClick={() => submit()}>确认救人</button> : <SeatChoices candidates={candidates} onChoose={submit} />}</section>
+  if (me.role === '女巫') return <section className="action-card"><span>女巫行动</span><h2>{me.witchTarget ? `今夜 ${me.witchTarget} 号倒牌` : '等待狼队行动完成'}</h2><p>解药：{me.hasAntidote ? '可用' : '已使用'} · 毒药：{me.hasPoison ? '可用' : '已使用'}</p><div className="option-tabs"><button className={witchMode === 'save' ? 'active' : ''} disabled={!me.hasAntidote || !me.witchTarget} onClick={() => setWitchMode('save')}>使用解药</button><button className={witchMode === 'poison' ? 'active' : ''} disabled={!me.hasPoison} onClick={() => setWitchMode('poison')}>使用毒药</button></div>{witchMode === 'save' ? <button className="button primary" disabled={!me.hasAntidote || !me.witchTarget} onClick={() => submit()}>确认救人</button> : <SeatChoices candidates={candidates} onChoose={submit} />}</section>
   return <section className="action-card"><span>{me.role === '狼人' ? '狼人行动' : '预言家查验'}</span><h2>选择一名存活玩家</h2><SeatChoices candidates={candidates} onChoose={submit} /></section>
 }
 
@@ -299,8 +326,9 @@ function VoteAction({ me, candidates, submitVote }: { me: Me; candidates: Player
   return <section className="action-card"><span>放逐投票</span><h2>{me.hasVoted ? '已投票，结算前可修改' : '选择一名存活玩家'}</h2><SeatChoices candidates={candidates} onChoose={submitVote} /></section>
 }
 
-function SpeechAction({ recording, transcribing, recordSpeech }: { recording: boolean; transcribing: boolean; recordSpeech: () => void }) {
-  return <section className="action-card speech-action"><span><Mic size={15} />白天发言</span><h2>开始录下你的发言</h2><p>结束录音后，AI 会将内容转成全员可见的公开记录。</p><button className={`button ${recording ? 'danger' : 'primary'}`} onClick={recordSpeech} disabled={transcribing}>{recording ? <Square size={16} fill="currentColor" /> : <Mic size={16} />}{transcribing ? 'AI 正在转写...' : recording ? '结束录音并转写' : '开始记录我的发言'}</button></section>
+function SpeechAction({ isSpeaker, speakerSeat, recording, transcribing, recordSpeech }: { isSpeaker: boolean; speakerSeat: number | null; recording: boolean; transcribing: boolean; recordSpeech: () => void }) {
+  if (!isSpeaker) return <div className="notice done"><UsersRound size={18} />{speakerSeat ? `当前轮到 ${speakerSeat} 号发言。` : '本轮发言已完成，等待主持进入投票。'}</div>
+  return <section className="action-card speech-action"><span><Mic size={15} />轮到你发言</span><h2>开始录下你的发言</h2><p>结束录音后，AI 会将内容转成全员可见的公开记录。</p><button className={`button ${recording ? 'danger' : 'primary'}`} onClick={recordSpeech} disabled={transcribing}>{recording ? <Square size={16} fill="currentColor" /> : <Mic size={16} />}{transcribing ? 'AI 正在转写...' : recording ? '结束录音并转写' : '开始记录我的发言'}</button></section>
 }
 
 function SeatChoices({ candidates, onChoose }: { candidates: Player[]; onChoose: (seat: number) => void }) {
